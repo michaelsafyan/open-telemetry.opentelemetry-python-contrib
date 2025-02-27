@@ -87,6 +87,16 @@ class OTelWrapper:
         event_name = "gen_ai.choice"
         self._log_event(event_name, attributes, body)
 
+    def log_tool_call(self, attributes, body):
+        _logger.debug("Recording tool call.")
+        event_name = "function_call.start"
+        self._log_event(event_name, attributes, body)
+
+    def log_tool_call_result(self, attributes, body):
+        _logger.debug("Recording tool call result.")
+        event_name = "function_call.end"
+        self._log_event(event_name, attributes, body)
+
     def _log_event(self, event_name, attributes, body):
         event = Event(event_name, body=body, attributes=attributes)
         self._event_logger.emit(event)

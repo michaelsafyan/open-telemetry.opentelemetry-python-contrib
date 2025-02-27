@@ -12,7 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import copy
 import functools
+import inspect
 import json
 import logging
 import os
@@ -28,8 +30,10 @@ from google.genai.types import (
     ContentListUnionDict,
     ContentUnion,
     ContentUnionDict,
+    GenerateContentConfig,
     GenerateContentConfigOrDict,
     GenerateContentResponse,
+    ToolListUnionDict,
 )
 
 from opentelemetry import trace
@@ -493,6 +497,81 @@ class _GenerateContentInstrumentationHelper:
             duration_seconds,
             attributes=attributes,
         )
+
+
+def _record_tool_call_args(
+    otel_wrapper: OTelWrapper,
+    tool_name: str,
+    args: list[Any],
+    kwargs: dict[Any, Any]):
+    attributes = {
+        code_attributes.CODE_FUNCTION_NAME: tool_name,
+    }
+    body = {
+        "positional_arguments": [_to_dict(arg) for arg in args],
+        "keyword_arguments": dict([(key, _to_dict(value)) for (key, value) in kwargs.items()])
+    }
+    otel_wrapper.log_tool_call(attributes, body)
+
+
+def _record_tool_call_result(
+    otel_wrapper: OTelWrapper,
+    tool_name: str,
+    args: list[Any],
+    kwargs: dict[Any, Any],
+    result: Any):
+    attributes = {
+        code_attributes.CODE_FUNCTION_NAME: tool_name,
+    }
+    body = {
+        "positional_arguments": [_to_dict(arg) for arg in args],
+        "keyword_arguments": dict([(key, _to_dict(value)) for (key, value) in kwargs.items()]),
+        "return_value": _to_dict(result),
+    }
+    otel_wrapper.log_tool_call_result(attributes, body)
+
+
+def _wrapped_tool(otel_wrapper: OTelWrapper, tool: ToolListUnionDict):
+    if not callable(tool):
+        return tool
+    if inspect.iscoroutinefunction(tool):
+        return tool
+    tool_name = tool.__name__
+    should_record_contents = flags.is_content_recording_enabled()
+    @functools.wraps(tool)
+    def wrapped_tool(*args, **kwargs):
+        with otel_wrapper.start_as_current_span(
+            f'tool_call {tool_name}',
+            attributes={
+                code_attributes.CODE_FUNCTION_NAME: tool.__name__,
+            }):
+            if should_record_contents:
+                _record_tool_call_args(otel_wrapper, tool.__name__, args, kwargs)
+            result = tool(*args, **kwargs)
+            if should_record_contents:
+                _record_tool_call_result(otel_wrapper, tool.__name__, args, kwargs, result)
+            return result
+    return wrapped_tool
+
+
+def _wrapped_config_with_tools(
+    otel_wrapper: OTelWrapper,
+    config: GenerateContentConfig) -> GenerateContentConfig:
+    result = copy.copy(config)
+    result.tool = [_wrapped_tool(otel_wrapper, tool) for tool in config.tools]
+    return result
+
+
+def _wrapped_config(
+    otel_wrapper: OTelWrapper,
+    config: Optional[GenerateContentConfigOrDict]) -> Optional[GenerateContentConfig]:
+  if config is None:
+    return None
+  if isinstance(config, dict):
+    config = GenerateContentConfig(config)
+  if not config.tools:
+    return config
+  return _wrapped_config_with_tools(otel_wrapper, config)
 
 
 def _create_instrumented_generate_content(
