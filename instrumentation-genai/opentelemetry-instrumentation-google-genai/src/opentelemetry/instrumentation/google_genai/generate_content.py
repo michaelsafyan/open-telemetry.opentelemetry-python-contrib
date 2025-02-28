@@ -571,7 +571,7 @@ def _wrapped_config(
   if config is None:
     return None
   if isinstance(config, dict):
-    config = GenerateContentConfig(config)
+    config = GenerateContentConfig(**config)
   if not config.tools:
     return config
   return _wrapped_config_with_tools(otel_wrapper, config)
