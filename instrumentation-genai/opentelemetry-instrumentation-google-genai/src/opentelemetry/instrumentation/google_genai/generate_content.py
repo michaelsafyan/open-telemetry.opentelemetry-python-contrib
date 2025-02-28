@@ -220,7 +220,9 @@ class _GenerateContentInstrumentationHelper:
         self._response_index = 0
         self._candidate_index = 0
 
-    def start_span_as_current_span(self, model_name, function_name):
+    def start_span_as_current_span(
+        self, model_name, function_name, end_on_exit=True
+    ):
         return self._otel_wrapper.start_as_current_span(
             f"{_GENERATE_CONTENT_OP_NAME} {model_name}",
             start_time=self._start_time,
@@ -230,6 +232,7 @@ class _GenerateContentInstrumentationHelper:
                 gen_ai_attributes.GEN_AI_REQUEST_MODEL: self._genai_request_model,
                 gen_ai_attributes.GEN_AI_OPERATION_NAME: _GENERATE_CONTENT_OP_NAME,
             },
+            end_on_exit=end_on_exit,
         )
 
     def process_request(
@@ -600,7 +603,7 @@ def _create_instrumented_generate_content(
                     self,
                     model=model,
                     contents=contents,
-                    config=config,
+                    config=_wrapped_config(otel_wrapper, config),
                     **kwargs,
                 )
                 helper.process_response(response)
@@ -640,7 +643,7 @@ def _create_instrumented_generate_content_stream(
                     self,
                     model=model,
                     contents=contents,
-                    config=config,
+                    config=_wrapped_config(otel_wrapper, config),
                     **kwargs,
                 ):
                     helper.process_response(response)
@@ -680,7 +683,7 @@ def _create_instrumented_async_generate_content(
                     self,
                     model=model,
                     contents=contents,
-                    config=config,
+                    config=_wrapped_config(otel_wrapper, config),
                     **kwargs,
                 )
                 helper.process_response(response)
@@ -712,22 +715,32 @@ def _create_instrumented_async_generate_content_stream(  # pyright: ignore
         helper = _GenerateContentInstrumentationHelper(
             self, otel_wrapper, model
         )
+        with helper.start_span_as_current_span(
+            model,
+            "google.genai.AsyncModels.generate_content_stream",
+            end_on_exit=False,
+        ) as span:
+            helper.process_request(contents, config)
+        try:
+            response_async_generator = await wrapped_func(
+                self,
+                model=model,
+                contents=contents,
+                config=_wrapped_config(otel_wrapper, config),
+                **kwargs,
+            )
+        except Exception as error:
+            helper.process_error(error)
+            helper.finalize_processing()
+            with trace.use_span(span, end_on_exit=True):
+                raise
 
-        async def _internal_generator():
-            with helper.start_span_as_current_span(
-                model, "google.genai.AsyncModels.generate_content_stream"
-            ):
-                helper.process_request(contents, config)
+        async def _response_async_generator_wrapper():
+            with trace.use_span(span, end_on_exit=True):
                 try:
-                    async for response in await wrapped_func(
-                        self,
-                        model=model,
-                        contents=contents,
-                        config=config,
-                        **kwargs,
-                    ):  # pyright: ignore
+                    async for response in response_async_generator:
                         helper.process_response(response)
-                        yield response  # pyright: ignore
+                        yield response
                 except Exception as error:
                     helper.process_error(error)
                     raise
@@ -736,7 +749,7 @@ def _create_instrumented_async_generate_content_stream(  # pyright: ignore
 
         class _GeneratorProvider:
             def __aiter__(self):
-                return _internal_generator()
+                return _response_async_generator_wrapper()
 
         return _GeneratorProvider()
 
