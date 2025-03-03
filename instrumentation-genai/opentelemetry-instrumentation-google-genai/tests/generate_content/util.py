@@ -14,8 +14,27 @@
 
 
 def create_valid_response(
-    response_text="The model response", input_tokens=10, output_tokens=20
+    response_text="The model response",
+    input_tokens=10,
+    output_tokens=20,
+    part=None,
+    parts=None,
+    candidate=None,
+    candidates=None
 ):
+    if part is None:
+        part = {"text": response_text}
+    if parts is None:
+        parts = [part]
+    if candidate is None:
+        candidate = {
+            "content": {
+                "role": "model",
+                "parts": parts,
+            }
+        }
+    if candidates is None:
+        candidates = [candidate]
     return {
         "modelVersion": "gemini-2.0-flash-test123",
         "usageMetadata": {
@@ -23,16 +42,5 @@ def create_valid_response(
             "candidatesTokenCount": output_tokens,
             "totalTokenCount": input_tokens + output_tokens,
         },
-        "candidates": [
-            {
-                "content": {
-                    "role": "model",
-                    "parts": [
-                        {
-                            "text": response_text,
-                        }
-                    ],
-                }
-            }
-        ],
+        "candidates": candidates,
     }

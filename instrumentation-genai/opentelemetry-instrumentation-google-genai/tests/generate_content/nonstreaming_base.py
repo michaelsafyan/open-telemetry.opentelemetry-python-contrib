@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from google.genai import types as genai_types
 import json
 import os
 import unittest
@@ -36,8 +37,10 @@ class NonStreamingTestCase(TestCase):
     def expected_function_name(self):
         raise NotImplementedError("Must implement 'expected_function_name'.")
 
-    def configure_valid_response(self, *args, **kwargs):
-        self.requests.add_response(create_valid_response(*args, **kwargs))
+    def configure_valid_response(self, *args, if_matches=None, **kwargs):
+        self.requests.add_response(
+            create_valid_response(*args, **kwargs),
+            if_matches=if_matches)
 
     def test_instrumentation_does_not_break_core_functionality(self):
         self.configure_valid_response(response_text="Yep, it works!")
@@ -197,3 +200,31 @@ class NonStreamingTestCase(TestCase):
         self.otel.assert_has_metrics_data_named(
             "gen_ai.client.operation.duration"
         )
+
+    def test_autoinstruments_tools(self):
+        def factorial(n: int):
+            result = 1
+            while n > 1:
+                result *= n
+                n -= 1
+            return result
+
+        def generate_content_impl(*args, **kwargs):
+            config = kwargs['config']
+            tools = config.tools
+            assert len(tools) == 1
+            factorial_tool = tools[0]
+            return str(factorial_tool(5))
+        
+        self.mock_generate_content.side_effect = generate_content_impl
+
+        response=self.generate_content(
+            model="gemini-2.0-flash",
+            contents="Compute 5 factorial",
+            config=genai_types.GenerateContentConfig(tools=[factorial]))
+        self.assertEqual(response.text, '120')
+        self.otel.assert_has_span_named("generate_content gemini-2.0-flash")
+        self.otel.assert_has_span_named("tool_call factorial")
+        generate_content_span = self.otel.get_span_named("generate_content gemini-2.0-flash")
+        tool_call_span = self.otel.get_span_named("tool_call factorial")
+        self.assertEqual(tool_call_span.parent.span_id, generate_content_span.context.span_id)

@@ -540,7 +540,7 @@ def _wrapped_tool(otel_wrapper: OTelWrapper, tool: ToolListUnionDict):
     if inspect.iscoroutinefunction(tool):
         return tool
     tool_name = tool.__name__
-    should_record_contents = flags.is_content_recording_enabled()
+    should_record_contents = is_content_recording_enabled()
     @functools.wraps(tool)
     def wrapped_tool(*args, **kwargs):
         with otel_wrapper.start_as_current_span(
@@ -561,7 +561,7 @@ def _wrapped_config_with_tools(
     otel_wrapper: OTelWrapper,
     config: GenerateContentConfig) -> GenerateContentConfig:
     result = copy.copy(config)
-    result.tool = [_wrapped_tool(otel_wrapper, tool) for tool in config.tools]
+    result.tools = [_wrapped_tool(otel_wrapper, tool) for tool in config.tools]
     return result
 
 
